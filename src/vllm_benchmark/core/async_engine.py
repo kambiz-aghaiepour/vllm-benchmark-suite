@@ -189,6 +189,9 @@ async def _async_streaming_request(
         "temperature": 0.7,
         "stream": True,
     }
+    # vLLM only includes usage in SSE when asked; without it the suite
+    # cannot account tokens, so request it explicitly.
+    data["stream_options"] = {"include_usage": True}
 
     try:
         start = time.perf_counter()

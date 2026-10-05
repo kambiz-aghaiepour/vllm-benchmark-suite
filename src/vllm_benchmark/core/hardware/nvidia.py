@@ -11,12 +11,15 @@ License: MIT
 
 from __future__ import annotations
 
+import os
 import subprocess
 import sys
 import threading
 import time
 from statistics import mean
 from typing import Dict, Optional
+
+import requests
 
 from vllm_benchmark.core.hardware.base import HardwareMonitor
 
@@ -41,6 +44,12 @@ class NvidiaMonitor(HardwareMonitor):
         self.per_gpu_stats: list[list[Dict]] = []  # per-GPU snapshots
         self.thread: Optional[threading.Thread] = None
         self.poll_interval = poll_interval
+        # Optional remote nvidia exporter (Prometheus text) sources, e.g.
+        # DGX Spark nodes exposing nvidia_smi_* on :9835. When set, GPU
+        # telemetry is pulled from there instead of the local nvidia-smi.
+        self.remote_urls: list[str] = [
+            u.strip() for u in os.environ.get("VLLM_BENCH_GPU_URLS", "").split(",") if u.strip()
+        ]
         self.gpu_count: int = self._detect_gpu_count()
 
     # ------------------------------------------------------------------
@@ -106,6 +115,51 @@ class NvidiaMonitor(HardwareMonitor):
         except (ValueError, IndexError):
             return None
 
+    def _fetch_remote_stats(self) -> list[Dict]:
+        """Fetch GPU stats from remote Prometheus-style nvidia exporters.
+
+        Reads nvidia_smi_* series (utilization ratio, watts, temp, SM clock)
+        from the URLs in ``VLLM_BENCH_GPU_URLS`` and normalises them into the
+        same per-GPU dict shape as the nvidia-smi path.
+        """
+        import re as _re
+
+        metric_map = {
+            "nvidia_smi_utilization_gpu_ratio": "gpu_util",
+            "nvidia_smi_power_draw_watts": "power_draw",
+            "nvidia_smi_temperature_gpu": "temperature",
+            "nvidia_smi_clocks_current_sm_clock_hz": "gpu_clock",
+        }
+        per_gpu: Dict[int, Dict] = {}
+        for url in self.remote_urls:
+            try:
+                text = requests.get(url, timeout=2).text
+            except Exception:
+                continue
+            for metric, key in metric_map.items():
+                for m in _re.finditer(
+                    r"^%s\{(.+?)\}\s+([0-9.eE+-]+)" % _re.escape(metric), text, _re.M
+                ):
+                    labels, val = m.group(1), float(m.group(2))
+                    idx_m = _re.search(r'gpu="(\d+)"', labels)
+                    idx = int(idx_m.group(1)) if idx_m else 0
+                    g = per_gpu.setdefault(
+                        idx,
+                        {
+                            "gpu_index": idx, "gpu_util": 0.0, "mem_used": 0.0,
+                            "mem_total": 0.0, "temperature": 0.0, "power_draw": 0.0,
+                            "gpu_clock": 0.0, "mem_clock": 0.0,
+                            "timestamp": time.time(), "perf_counter": time.perf_counter(),
+                        },
+                    )
+                    if key == "gpu_util":
+                        g[key] = val * 100.0   # ratio -> percent
+                    elif key == "gpu_clock":
+                        g[key] = val / 1e6     # Hz -> MHz
+                    else:
+                        g[key] = val
+        return list(per_gpu.values())
+
     def get_all_gpu_stats(self) -> list[Dict]:
         """Query nvidia-smi for per-GPU statistics across all GPUs.
 
@@ -113,6 +167,8 @@ class NvidiaMonitor(HardwareMonitor):
             List of dicts, one per GPU, each containing GPU metrics.
             Empty list if the query fails.
         """
+        if self.remote_urls:
+            return self._fetch_remote_stats()
         try:
             gpu_ids = ",".join(str(i) for i in range(self.gpu_count))
             result = subprocess.run(

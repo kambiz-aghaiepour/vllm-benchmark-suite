@@ -98,6 +98,8 @@ def _make_single_request(
         "temperature": temperature,
         "stream": stream,
     }
+    if stream:
+        data["stream_options"] = {"include_usage": True}
 
     start = time.time()
     try:
@@ -314,6 +316,7 @@ def run_multiturn_traffic(
                 "temperature": config.temperature,
                 "stream": True,
             }
+            data["stream_options"] = {"include_usage": True}
 
             start = time.time()
             try:

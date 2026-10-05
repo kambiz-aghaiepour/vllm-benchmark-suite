@@ -10,6 +10,7 @@ License: MIT
 from __future__ import annotations
 
 import json
+import os
 import platform
 import re
 import subprocess
@@ -56,6 +57,11 @@ class SystemInfo:
     @staticmethod
     def get_gpu_name() -> Optional[str]:
         """Get GPU model name."""
+        # CLI/env override allows benchmarking a remote server whose GPU is
+        # not present on the client host (e.g. DGX Spark / GB10 cluster).
+        override = os.environ.get("VLLM_BENCH_GPU_NAME")
+        if override:
+            return override
         try:
             result = subprocess.run(
                 ["nvidia-smi", "--query-gpu=name", "--format=csv,noheader"],
@@ -72,6 +78,9 @@ class SystemInfo:
     @staticmethod
     def get_total_vram() -> Optional[float]:
         """Get total GPU VRAM in GB."""
+        override = os.environ.get("VLLM_BENCH_VRAM_GB")
+        if override:
+            return float(override)
         try:
             result = subprocess.run(
                 [

@@ -120,7 +120,7 @@ def visualize_results(
             latency_labels.append(f"{users}u")
 
     if latency_data:
-        bp = ax2.boxplot(latency_data, labels=latency_labels, patch_artist=True, widths=0.6)
+        bp = ax2.boxplot(latency_data, tick_labels=latency_labels, patch_artist=True, widths=0.6)
         for i, patch in enumerate(bp["boxes"]):
             patch.set_facecolor(colors[i % len(colors)])
             patch.set_alpha(0.7)
